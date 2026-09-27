@@ -1,0 +1,78 @@
+diff --git a/include/dolphin/os.h b/include/dolphin/os.h
+index 91cf91bb..6eb03c10 100644
+--- a/include/dolphin/os.h
++++ b/include/dolphin/os.h
+@@ -171,19 +171,26 @@ u32 OSCachedToPhysical(void* caddr);
+ u32 OSUncachedToPhysical(void* ucaddr);
+ void* OSCachedToUncached(void* caddr);
+ void* OSUncachedToCached(void* ucaddr);
+-#if !DEBUG
++#if defined(TARGET_PC)
++extern u8* port_mem1_base;
++#define OSPhysicalToCached(paddr)    ((void*)(port_mem1_base + (u32)(paddr)))
++#define OSPhysicalToUncached(paddr)  OSPhysicalToCached(paddr)
++#define OSCachedToPhysical(caddr)    ((u32)((u8*)(u32)(caddr) - port_mem1_base))
++#define OSUncachedToPhysical(ucaddr) OSCachedToPhysical(ucaddr)
++#define OSCachedToUncached(caddr)    ((void*)(u32)(caddr))
++#define OSUncachedToCached(ucaddr)   ((void*)(u32)(ucaddr))
++#elif !DEBUG
+ #define OSPhysicalToCached(paddr)                                              \
+-	((void*)((u32)(OS_BASE_CACHED + (u32)(paddr))))
++        ((void*)((u32)(OS_BASE_CACHED + (u32)(paddr))))
+ #define OSPhysicalToUncached(paddr)                                            \
+-	((void*)((u32)(OS_BASE_UNCACHED + (u32)(paddr))))
++        ((void*)((u32)(OS_BASE_UNCACHED + (u32)(paddr))))
+ #define OSCachedToPhysical(caddr)    ((u32)((u32)(caddr) - OS_BASE_CACHED))
+ #define OSUncachedToPhysical(ucaddr) ((u32)((u32)(ucaddr) - OS_BASE_UNCACHED))
+ #define OSCachedToUncached(caddr)                                              \
+-	((void*)((u8*)(caddr) + (OS_BASE_UNCACHED - OS_BASE_CACHED)))
++        ((void*)((u8*)(caddr) + (OS_BASE_UNCACHED - OS_BASE_CACHED)))
+ #define OSUncachedToCached(ucaddr)                                             \
+-	((void*)((u8*)(ucaddr) - (OS_BASE_UNCACHED - OS_BASE_CACHED)))
++        ((void*)((u8*)(ucaddr) - (OS_BASE_UNCACHED - OS_BASE_CACHED)))
+ #endif
+-
+ static inline void OSInitFastCast(void)
+ {
+ #ifdef __MWERKS__ // clang-format off
+diff --git a/src/JSystem/JRenderer.cpp b/src/JSystem/JRenderer.cpp
+index cb24fb46..1b59be60 100644
+--- a/src/JSystem/JRenderer.cpp
++++ b/src/JSystem/JRenderer.cpp
+@@ -280,7 +280,7 @@ void J3DGDSetTexImgPtr(GXTexMapID map, void* image)
+ {
+ 	// clang-format off
+ 	u32 reg =
+-		(u32) ((u32)OSPhysicalToCached(image) >> 5) |
++		(u32) ((u32)OSCachedToPhysical(image) >> 5) |
+ 		(u32) GXTexImage3Ids[map] << 24;
+ 	// clang-format on
+ 
+@@ -316,7 +316,7 @@ void J3DGDLoadTlut(void* tlut, u32 tlut_addr, GXTlutSize entry_count)
+ 	GDOverflowCheck(5);
+ 	// clang-format off
+ 	J3DGDWriteBPCmd(
+-		(u32) ((u32)OSPhysicalToCached(tlut) >> 5) |
++		(u32) ((u32)OSCachedToPhysical(tlut) >> 5) |
+ 		(u32) 0x64 << 24
+ 	);
+ 	// clang-format on
+diff --git a/src/System/DrawSyncManager.cpp b/src/System/DrawSyncManager.cpp
+index ab42b898..3fefb802 100644
+--- a/src/System/DrawSyncManager.cpp
++++ b/src/System/DrawSyncManager.cpp
+@@ -93,7 +93,13 @@ void* TDrawSyncManager::threadFunc(void* param_1)
+ 	for (;;) {
+ 		void* msg;
+ 		OSReceiveMessage(&self->mMessageQueue, &msg, 1);
+-		if ((size_t)msg >= 0x80000000) {
++		#if defined(TARGET_PC)
++				// MEM1 can sit anywhere on the port, so every value that is not a
++				// u16 token is a FIFO pointer (the shutdown message is never sent).
++				if ((size_t)msg >= 0x10000) {
++		#else
++				if ((size_t)msg >= 0x80000000) {
++		#endif
+ 			self->mFifo->push(msg);
+ 
+ 			u32 iVar1 = self->mFifo->size();

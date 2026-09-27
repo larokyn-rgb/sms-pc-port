@@ -83,15 +83,35 @@ uint64_t hashBytes(const void* data, size_t n, uint64_t seed) {
 static uint8_t* s_memBase = reinterpret_cast<uint8_t*>(static_cast<uintptr_t>(0x80000000u));
 static uint32_t s_memSize = 0x01800000;
 
+// Addresses in GX registers are 29 bits wide. Read them as a signed offset
+// from the MEM1 base, so host memory up to 256 MiB below or above MEM1
+// (the executable's static data, for instance) stays reachable.
 void* physToPtr(uint32_t phys) {
-    phys &= 0x3FFFFFFF;
+    phys &= 0x1FFFFFFF;
     if (!phys) return nullptr;
-    return s_memBase + phys;
+    // Some game code writes raw MEM1 pointers into GPU registers and relies on
+    // the hardware ignoring the top bits. When MEM1 is not at 0x80000000, such a
+    // value lands in [base, base + size) and must not get the base added again.
+    uintptr_t base = reinterpret_cast<uintptr_t>(s_memBase) & 0x1FFFFFFF;
+    if (base >= s_memSize && phys >= base && phys < base + s_memSize) {
+        static int n = 0;
+        if (n++ < 5)
+            fprintf(stderr, "[gx] raw MEM1 pointer %08x in a GPU register\n", phys);
+        return s_memBase + (phys - base);
+    }
+    int32_t off = int32_t(phys << 3) >> 3;
+    return s_memBase + off;
 }
 
 uint32_t ptrToPhys(const void* p) {
     if (!p) return 0;
-    uintptr_t off = reinterpret_cast<uintptr_t>(p) - reinterpret_cast<uintptr_t>(s_memBase);
+    intptr_t off = reinterpret_cast<intptr_t>(p) - reinterpret_cast<intptr_t>(s_memBase);
+    if (off < -0x10000000 || off >= 0x10000000) {
+        static int n = 0;
+        if (n++ < 20)
+            fprintf(stderr, "[gx] ptr %p is more than 256 MiB from MEM1 (base %p)\n",
+                    p, (void*)s_memBase);
+    }
     return static_cast<uint32_t>(off);
 }
 

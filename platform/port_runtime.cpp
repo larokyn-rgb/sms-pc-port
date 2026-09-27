@@ -12,6 +12,8 @@
 #include <signal.h>
 #include <execinfo.h>
 #include "port_host.h"
+#include "port_host.h"
+#include "sms_gx/gx_pc.h"
 #ifdef _WIN32
 #include <windows.h>
 #include <io.h>
@@ -226,15 +228,21 @@ static void map_mem1()
 		mb = (u32)atoi(e);
 	port_mem1_size = mb << 20;
 	void* want = (void*)(uintptr_t)0x80000000u;
-#ifdef _WIN32
-	void* p = VirtualAlloc(want, port_mem1_size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
-	if (p != want) {
-		port_log("[port] cannot map MEM1 at 0x80000000 (got %p)\n", p);
-		if (p)
-			VirtualFree(p, 0, MEM_RELEASE);
-		exit(1);
-	}
-#else
+	#ifdef _WIN32
+	        void* p = NULL;
+	        if (!getenv("SMS_MEM1_ANYWHERE"))
+	                p = VirtualAlloc(want, port_mem1_size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+	        if (p != want) {
+	                if (p)
+	                        VirtualFree(p, 0, MEM_RELEASE);
+	                port_log("[port] MEM1 not at 0x80000000, using any address\n");
+	                p = VirtualAlloc(NULL, port_mem1_size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+	                if (!p) {
+	                        port_log("[port] out of memory for MEM1\n");
+	                        exit(1);
+	                }
+	        }
+	#else
 	void* p = map_exact(want, port_mem1_size);
 	if (p != want) {
 		port_log("[port] cannot map MEM1 at 0x80000000; falling back to a heap block\n");
@@ -530,12 +538,15 @@ extern "C" void port_init(int argc, char** argv)
 	struct sigaction sa;
 	memset(&sa, 0, sizeof sa);
 	sa.sa_sigaction = crash_handler;
+	map_mem1();
+	GXPC_SetMemoryWindow(port_mem1_base, port_mem1_size);
 	sa.sa_flags = SA_SIGINFO;
 	for (int sig : {SIGSEGV, SIGBUS, SIGFPE, SIGILL, SIGABRT})
 		sigaction(sig, &sa, nullptr);
 #endif
 	atexit(port_stub_report);
 	map_mem1();
+	GXPC_SetMemoryWindow(port_mem1_base, port_mem1_size);
 	if (sizeof(void*) == 4)
 		map_hw_sink();
 	port_os_init();
